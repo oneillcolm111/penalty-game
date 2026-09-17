@@ -175,9 +175,9 @@ const startBtn = document.getElementById('startBtn');
 const diffBtns = document.querySelectorAll('.diffBtn');
 
 const DIFFICULTIES = {
-  Easy:   { keeperReach: 55, keeperSkill: 0.30, diveDurationMs: 500 },
-  Normal: { keeperReach: 72, keeperSkill: 0.55, diveDurationMs: 430 },
-  Hard:   { keeperReach: 88, keeperSkill: 0.80, diveDurationMs: 360 },
+  Easy:   { keeperReach: 40, keeperSkill: 0.30, diveDurationMs: 500 },
+  Normal: { keeperReach: 52, keeperSkill: 0.55, diveDurationMs: 430 },
+  Hard:   { keeperReach: 64, keeperSkill: 0.80, diveDurationMs: 360 },
 };
 let currentDifficultyKey = 'Normal';
 let currentDifficulty = DIFFICULTIES.Normal;
@@ -229,7 +229,7 @@ const GOAL_HALF_WIDTH = 140;
 const GOAL_TOP_Y = 70;
 const GOAL_BOTTOM_Y = 170;
 const BALL_START = { x: 320, y: 430 };
-const KICKER_POS = { x: 320, y: 460 };
+const KICKER_POS = { x: 320, y: 475 };
 
 const MAX_DRAG_X = 140;
 const MAX_DRAG_Y = 260;
@@ -246,9 +246,11 @@ let phase = 'aiming'; // aiming | flying | result
 let resultTimer = 0;
 const RESULT_PAUSE_MS = 1300;
 
-let ball = { x: BALL_START.x, y: BALL_START.y, r: 9, startX: 0, startY: 0, targetX: 0, targetY: 0, progress: 0, duration: 480, curl: 0 };
+const BALL_START_R = 14;
+let ball = { x: BALL_START.x, y: BALL_START.y, r: BALL_START_R, startX: 0, startY: 0, targetX: 0, targetY: 0, progress: 0, duration: 480, curl: 0 };
 let keeper = { x: GOAL_CENTER_X, startX: GOAL_CENTER_X, targetX: GOAL_CENTER_X, diving: false, progress: 0, duration: 430 };
 let pendingOutcome = null;
+let netBulge = { active: false, x: 0, y: 0, elapsed: 0, duration: 500 };
 
 let kickerState = 'idle'; // idle | celebrate | sad
 let kickerTimer = 0;
@@ -308,6 +310,14 @@ function playMissGroan() {
   playTone(300, 0.3, 'sawtooth', 0, 0.1);
   playTone(220, 0.4, 'sawtooth', 0.2, 0.1);
 }
+function playPostClang() {
+  playTone(1200, 0.08, 'square', 0, 0.18);
+  playTone(850, 0.12, 'square', 0.05, 0.14);
+}
+function playNetHit() {
+  playTone(150, 0.12, 'sine', 0, 0.18);
+  playTone(90, 0.15, 'sine', 0.03, 0.12);
+}
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function easeOutQuad(t) { return 1 - (1 - t) * (1 - t); }
@@ -327,12 +337,13 @@ let msgTimer = 0;
 function resetAttempt() {
   ball.x = BALL_START.x;
   ball.y = BALL_START.y;
-  ball.r = 9;
+  ball.r = BALL_START_R;
   ball.curl = 0;
   keeper.x = GOAL_CENTER_X;
   keeper.diving = false;
   drag.active = false;
   drag.trail = [];
+  netBulge.active = false;
   phase = 'aiming';
 }
 
@@ -360,6 +371,8 @@ function getCanvasPos(e) {
   return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
 }
 
+const POST_MARGIN = 10;
+
 function takeShot(dx, dy, curl) {
   ensureAudio();
   playKick();
@@ -371,16 +384,11 @@ function takeShot(dx, dy, curl) {
   const rawTargetX = GOAL_CENTER_X + horiz * GOAL_HALF_WIDTH * 1.15;
   const rawTargetY = GOAL_BOTTOM_Y - Math.min(power, 1) * (GOAL_BOTTOM_Y - GOAL_TOP_Y);
 
-  const missHigh = power > MISS_HIGH_POWER;
+  const nearLeftPost = Math.abs(rawTargetX - (GOAL_CENTER_X - GOAL_HALF_WIDTH)) < POST_MARGIN;
+  const nearRightPost = Math.abs(rawTargetX - (GOAL_CENTER_X + GOAL_HALF_WIDTH)) < POST_MARGIN;
+  const nearBar = power > 0.88 && power < 1.30 && Math.abs(rawTargetX - GOAL_CENTER_X) < GOAL_HALF_WIDTH + POST_MARGIN;
+  const missHigh = power >= 1.30;
   const missWide = Math.abs(rawTargetX - GOAL_CENTER_X) > GOAL_HALF_WIDTH + 4;
-
-  ball.startX = ball.x;
-  ball.startY = ball.y;
-  ball.targetX = clamp(rawTargetX, GOAL_CENTER_X - GOAL_HALF_WIDTH - 50, GOAL_CENTER_X + GOAL_HALF_WIDTH + 50);
-  ball.targetY = missHigh ? (GOAL_TOP_Y - 34) : rawTargetY;
-  ball.progress = 0;
-  ball.duration = 480;
-  ball.curl = clamp((curl || 0) * 1.6, -MAX_CURL, MAX_CURL);
 
   const skillRoll = Math.random() < currentDifficulty.keeperSkill;
   let diveTargetX;
@@ -396,42 +404,77 @@ function takeShot(dx, dy, curl) {
   keeper.duration = currentDifficulty.diveDurationMs;
 
   let outcome;
-  if (missHigh) {
+  let finalTargetX = clamp(rawTargetX, GOAL_CENTER_X - GOAL_HALF_WIDTH - 50, GOAL_CENTER_X + GOAL_HALF_WIDTH + 50);
+  let finalTargetY = rawTargetY;
+
+  if (nearBar) {
+    outcome = Math.random() < 0.4 ? 'bar-in' : 'bar-out';
+    finalTargetX = clamp(rawTargetX, GOAL_CENTER_X - GOAL_HALF_WIDTH + 4, GOAL_CENTER_X + GOAL_HALF_WIDTH - 4);
+    finalTargetY = outcome === 'bar-in' ? GOAL_TOP_Y + 14 : GOAL_TOP_Y - 22;
+  } else if (missHigh) {
     outcome = 'high';
+    finalTargetY = GOAL_TOP_Y - 34;
+  } else if (nearLeftPost || nearRightPost) {
+    outcome = Math.random() < 0.4 ? 'post-in' : 'post-out';
+    const postX = nearLeftPost ? (GOAL_CENTER_X - GOAL_HALF_WIDTH) : (GOAL_CENTER_X + GOAL_HALF_WIDTH);
+    const inward = nearLeftPost ? 16 : -16;
+    const outward = nearLeftPost ? -20 : 20;
+    finalTargetX = outcome === 'post-in' ? postX + inward : postX + outward;
   } else if (missWide) {
     outcome = 'wide';
   } else {
     const topCornerBonus = rawTargetY < (GOAL_TOP_Y + (GOAL_BOTTOM_Y - GOAL_TOP_Y) * 0.35) ? 0.6 : 1.0;
-    const curlFactor = clamp(Math.abs(ball.curl) / MAX_CURL, 0, 1);
+    const curlFactor = clamp(Math.abs(clamp((curl || 0) * 1.6, -MAX_CURL, MAX_CURL)) / MAX_CURL, 0, 1);
     const effectiveReach = currentDifficulty.keeperReach * topCornerBonus * (1 - curlFactor * 0.25);
     const dist = Math.abs(rawTargetX - diveTargetX);
     outcome = dist <= effectiveReach ? 'save' : 'goal';
   }
 
+  ball.startX = ball.x;
+  ball.startY = ball.y;
+  ball.targetX = finalTargetX;
+  ball.targetY = finalTargetY;
+  ball.progress = 0;
+  ball.duration = 480;
+  ball.curl = clamp((curl || 0) * 1.6, -MAX_CURL, MAX_CURL);
+
   pendingOutcome = outcome;
   phase = 'flying';
 }
 
+const RESULT_MESSAGES = {
+  goal: 'GOAL!',
+  save: 'SAVED!',
+  wide: 'WIDE!',
+  high: 'OVER THE BAR!',
+  'bar-in': 'OFF THE BAR... IN!',
+  'bar-out': 'OFF THE BAR, OVER!',
+  'post-in': 'OFF THE POST... IN!',
+  'post-out': 'OFF THE POST, OUT!',
+};
+
 function resolveShot(outcome) {
-  attempts.push(outcome === 'goal' ? 'goal' : 'miss');
-  if (outcome === 'goal') {
+  const isGoal = outcome === 'goal' || outcome === 'bar-in' || outcome === 'post-in';
+  const isPostOrBar = outcome === 'bar-in' || outcome === 'bar-out' || outcome === 'post-in' || outcome === 'post-out';
+
+  attempts.push(isGoal ? 'goal' : 'miss');
+  showMessage(RESULT_MESSAGES[outcome] || '...', RESULT_PAUSE_MS);
+  if (isPostOrBar) playPostClang();
+
+  if (isGoal) {
     score++;
     kickerState = 'celebrate';
     playGoalCheer();
-    showMessage('GOAL!', RESULT_PAUSE_MS);
-  } else if (outcome === 'save') {
-    kickerState = 'sad';
-    playMissGroan();
-    showMessage('SAVED!', RESULT_PAUSE_MS);
-  } else if (outcome === 'wide') {
-    kickerState = 'sad';
-    playMissGroan();
-    showMessage('WIDE!', RESULT_PAUSE_MS);
+    playNetHit();
+    netBulge.active = true;
+    netBulge.x = ball.targetX;
+    netBulge.y = ball.targetY;
+    netBulge.elapsed = 0;
   } else {
     kickerState = 'sad';
     playMissGroan();
-    showMessage('OVER THE BAR!', RESULT_PAUSE_MS);
   }
+
   scoreEl.textContent = score;
   updateAttemptsRow();
   kickerTimer = KICKER_ANIM_MS;
@@ -519,7 +562,7 @@ function update(dt) {
     const bend = Math.sin(Math.min(ball.progress, 1) * Math.PI) * ball.curl;
     ball.x = straightX + perpX * bend;
     ball.y = straightY + perpY * bend;
-    ball.r = 9 - 5 * bp;
+    ball.r = BALL_START_R - 6 * bp;
 
     if (keeper.diving) {
       const kp = easeOutQuad(keeper.progress);
@@ -548,6 +591,10 @@ function update(dt) {
   if (kickerTimer > 0) {
     kickerTimer -= dt;
     if (kickerTimer <= 0) { kickerTimer = 0; kickerState = 'idle'; }
+  }
+  if (netBulge.active) {
+    netBulge.elapsed += dt;
+    if (netBulge.elapsed >= netBulge.duration) netBulge.active = false;
   }
 }
 
@@ -662,8 +709,8 @@ function drawStickFigure(x, y, opts) {
     ctx.moveTo(4, -26); ctx.lineTo(14, -42);
     ctx.moveTo(-4, -26); ctx.lineTo(-14, -42);
   } else if (o.armsWide) {
-    ctx.moveTo(4, -26); ctx.lineTo(20, -24);
-    ctx.moveTo(-4, -26); ctx.lineTo(-20, -24);
+    ctx.moveTo(4, -26); ctx.lineTo(34, -20);
+    ctx.moveTo(-4, -26); ctx.lineTo(-34, -20);
   } else if (o.armsDown) {
     ctx.moveTo(4, -26); ctx.lineTo(9, -10);
     ctx.moveTo(-4, -26); ctx.lineTo(-9, -10);
@@ -708,14 +755,14 @@ function drawKeeper() {
   const dir = keeper.targetX >= keeper.startX ? 1 : -1;
   const lean = diveT * dir * 0.5; // radians of lean into the dive
   ctx.save();
-  ctx.translate(keeper.x, GOAL_TOP_Y + 68);
+  ctx.translate(keeper.x, GOAL_BOTTOM_Y);
   ctx.rotate(lean * 0.6);
   drawStickFigure(0, 0, {
     shirtColor: '#ffd76e',
     limbColor: '#7a5c00',
     armsWide: keeper.diving,
     legsApart: keeper.diving,
-    scale: 1.7,
+    scale: 1.3,
   });
   ctx.restore();
 }
@@ -726,6 +773,7 @@ function drawKicker() {
     armsUp: kickerState === 'celebrate',
     armsDown: kickerState === 'sad',
     face: kickerState === 'celebrate' ? 'happy' : (kickerState === 'sad' ? 'sad' : 'neutral'),
+    scale: 1.3,
   });
 }
 
@@ -775,9 +823,29 @@ function drawAimFeedback() {
   ctx.restore();
 }
 
+function drawNetBulge() {
+  if (!netBulge.active) return;
+  const t = clamp(netBulge.elapsed / netBulge.duration, 0, 1);
+  const radius = 8 + t * 34;
+  const alpha = 1 - t;
+  ctx.save();
+  ctx.strokeStyle = `rgba(255,255,255,${alpha * 0.9})`;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(netBulge.x, netBulge.y, radius, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = `rgba(255,255,255,${alpha * 0.6})`;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(netBulge.x, netBulge.y, radius * 0.6, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function draw() {
   ctx.clearRect(0, 0, W, H);
   drawGoal();
+  drawNetBulge();
   drawPitchLines();
   drawKeeper();
   drawKicker();

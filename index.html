@@ -310,6 +310,10 @@ function playMissGroan() {
   playTone(300, 0.3, 'sawtooth', 0, 0.1);
   playTone(220, 0.4, 'sawtooth', 0.2, 0.1);
 }
+function playSaveThud() {
+  playTone(220, 0.1, 'triangle', 0, 0.2);
+  playTone(140, 0.14, 'triangle', 0.04, 0.15);
+}
 function playPostClang() {
   playTone(1200, 0.08, 'square', 0, 0.18);
   playTone(850, 0.12, 'square', 0.05, 0.14);
@@ -339,6 +343,7 @@ function resetAttempt() {
   ball.y = BALL_START.y;
   ball.r = BALL_START_R;
   ball.curl = 0;
+  ball.leg = 1;
   keeper.x = GOAL_CENTER_X;
   keeper.diving = false;
   drag.active = false;
@@ -437,6 +442,18 @@ function takeShot(dx, dy, curl) {
   ball.progress = 0;
   ball.duration = 480;
   ball.curl = clamp((curl || 0) * 1.6, -MAX_CURL, MAX_CURL);
+  ball.leg = 1;
+
+  if (outcome === 'save') {
+    let reboundDirX = rawTargetX - diveTargetX;
+    reboundDirX = Math.abs(reboundDirX) < 1 ? (Math.random() < 0.5 ? -1 : 1) : Math.sign(reboundDirX);
+    ball.reboundTargetX = clamp(
+      finalTargetX + reboundDirX * (40 + Math.random() * 40),
+      GOAL_CENTER_X - GOAL_HALF_WIDTH - 60,
+      GOAL_CENTER_X + GOAL_HALF_WIDTH + 60
+    );
+    ball.reboundTargetY = clamp(finalTargetY + 60 + Math.random() * 70, GOAL_TOP_Y, 460);
+  }
 
   pendingOutcome = outcome;
   phase = 'flying';
@@ -570,7 +587,19 @@ function update(dt) {
     }
 
     if (ball.progress >= 1) {
-      resolveShot(pendingOutcome);
+      if (pendingOutcome === 'save' && ball.leg === 1) {
+        ball.leg = 2;
+        ball.startX = ball.x;
+        ball.startY = ball.y;
+        ball.targetX = ball.reboundTargetX;
+        ball.targetY = ball.reboundTargetY;
+        ball.progress = 0;
+        ball.duration = 300;
+        ball.curl = 0;
+        playSaveThud();
+      } else {
+        resolveShot(pendingOutcome);
+      }
     }
   } else if (phase === 'result') {
     resultTimer -= dt;

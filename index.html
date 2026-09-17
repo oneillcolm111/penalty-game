@@ -232,8 +232,10 @@ const BALL_START = { x: 320, y: 430 };
 const KICKER_POS = { x: 320, y: 460 };
 
 const MAX_DRAG_X = 140;
-const MAX_DRAG_Y = 220;
+const MAX_DRAG_Y = 260;
 const MIN_DRAG = 18;
+const MISS_HIGH_POWER = 1.15;
+const MAX_CURL = 60;
 
 let running = false;
 let attempts = []; // 'goal' | 'save' | 'wide' | 'high'
@@ -244,7 +246,7 @@ let phase = 'aiming'; // aiming | flying | result
 let resultTimer = 0;
 const RESULT_PAUSE_MS = 1300;
 
-let ball = { x: BALL_START.x, y: BALL_START.y, r: 9, startX: 0, startY: 0, targetX: 0, targetY: 0, progress: 0, duration: 480 };
+let ball = { x: BALL_START.x, y: BALL_START.y, r: 9, startX: 0, startY: 0, targetX: 0, targetY: 0, progress: 0, duration: 480, curl: 0 };
 let keeper = { x: GOAL_CENTER_X, startX: GOAL_CENTER_X, targetX: GOAL_CENTER_X, diving: false, progress: 0, duration: 430 };
 let pendingOutcome = null;
 
@@ -252,7 +254,7 @@ let kickerState = 'idle'; // idle | celebrate | sad
 let kickerTimer = 0;
 const KICKER_ANIM_MS = 1100;
 
-let drag = { active: false, startX: 0, startY: 0, curX: 0, curY: 0 };
+let drag = { active: false, startX: 0, startY: 0, curX: 0, curY: 0, trail: [] };
 
 let audioCtx = null;
 function ensureAudio() {
@@ -326,9 +328,11 @@ function resetAttempt() {
   ball.x = BALL_START.x;
   ball.y = BALL_START.y;
   ball.r = 9;
+  ball.curl = 0;
   keeper.x = GOAL_CENTER_X;
   keeper.diving = false;
   drag.active = false;
+  drag.trail = [];
   phase = 'aiming';
 }
 
@@ -356,7 +360,7 @@ function getCanvasPos(e) {
   return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
 }
 
-function takeShot(dx, dy) {
+function takeShot(dx, dy, curl) {
   ensureAudio();
   playKick();
 
@@ -367,7 +371,7 @@ function takeShot(dx, dy) {
   const rawTargetX = GOAL_CENTER_X + horiz * GOAL_HALF_WIDTH * 1.15;
   const rawTargetY = GOAL_BOTTOM_Y - Math.min(power, 1) * (GOAL_BOTTOM_Y - GOAL_TOP_Y);
 
-  const missHigh = power > 1.05;
+  const missHigh = power > MISS_HIGH_POWER;
   const missWide = Math.abs(rawTargetX - GOAL_CENTER_X) > GOAL_HALF_WIDTH + 4;
 
   ball.startX = ball.x;
@@ -376,6 +380,7 @@ function takeShot(dx, dy) {
   ball.targetY = missHigh ? (GOAL_TOP_Y - 34) : rawTargetY;
   ball.progress = 0;
   ball.duration = 480;
+  ball.curl = clamp((curl || 0) * 1.6, -MAX_CURL, MAX_CURL);
 
   const skillRoll = Math.random() < currentDifficulty.keeperSkill;
   let diveTargetX;
@@ -397,7 +402,8 @@ function takeShot(dx, dy) {
     outcome = 'wide';
   } else {
     const topCornerBonus = rawTargetY < (GOAL_TOP_Y + (GOAL_BOTTOM_Y - GOAL_TOP_Y) * 0.35) ? 0.6 : 1.0;
-    const effectiveReach = currentDifficulty.keeperReach * topCornerBonus;
+    const curlFactor = clamp(Math.abs(ball.curl) / MAX_CURL, 0, 1);
+    const effectiveReach = currentDifficulty.keeperReach * topCornerBonus * (1 - curlFactor * 0.25);
     const dist = Math.abs(rawTargetX - diveTargetX);
     outcome = dist <= effectiveReach ? 'save' : 'goal';
   }
@@ -449,12 +455,16 @@ function endShootout() {
 canvas.addEventListener('pointerdown', (e) => {
   if (!running || phase !== 'aiming') return;
   e.preventDefault();
+  if (canvas.setPointerCapture) {
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+  }
   const pos = getCanvasPos(e);
   drag.active = true;
   drag.startX = pos.x;
   drag.startY = pos.y;
   drag.curX = pos.x;
   drag.curY = pos.y;
+  drag.trail = [{ x: pos.x, y: pos.y }];
 });
 canvas.addEventListener('pointermove', (e) => {
   if (!drag.active) return;
@@ -462,14 +472,34 @@ canvas.addEventListener('pointermove', (e) => {
   const pos = getCanvasPos(e);
   drag.curX = pos.x;
   drag.curY = pos.y;
+  drag.trail.push({ x: pos.x, y: pos.y });
+  if (drag.trail.length > 8) drag.trail.shift();
 });
 canvas.addEventListener('pointerup', (e) => {
   if (!drag.active) return;
   drag.active = false;
+  if (canvas.releasePointerCapture) {
+    try { canvas.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+  }
+  const pos = getCanvasPos(e);
+  drag.curX = pos.x;
+  drag.curY = pos.y;
+  drag.trail.push({ x: pos.x, y: pos.y });
+  if (drag.trail.length > 8) drag.trail.shift();
+
   const dx = drag.curX - drag.startX;
   const dy = drag.curY - drag.startY;
   if (Math.hypot(dx, dy) < MIN_DRAG) return;
-  takeShot(dx, dy);
+
+  let curl = 0;
+  if (drag.trail.length >= 3) {
+    const tail = drag.trail[drag.trail.length - 1];
+    const mid = drag.trail[Math.max(0, drag.trail.length - 4)];
+    const rvx = tail.x - mid.x, rvy = tail.y - mid.y;
+    const mainLen = Math.hypot(dx, dy) || 1;
+    curl = (dx * rvy - dy * rvx) / mainLen;
+  }
+  takeShot(dx, dy, curl);
 });
 canvas.addEventListener('pointercancel', () => { drag.active = false; });
 
@@ -481,8 +511,14 @@ function update(dt) {
     if (keeper.diving) keeper.progress = Math.min(1, keeper.progress + dt / keeper.duration);
 
     const bp = easeOutQuad(ball.progress);
-    ball.x = ball.startX + (ball.targetX - ball.startX) * bp;
-    ball.y = ball.startY + (ball.targetY - ball.startY) * bp;
+    const straightX = ball.startX + (ball.targetX - ball.startX) * bp;
+    const straightY = ball.startY + (ball.targetY - ball.startY) * bp;
+    const dirX = ball.targetX - ball.startX, dirY = ball.targetY - ball.startY;
+    const dirLen = Math.hypot(dirX, dirY) || 1;
+    const perpX = -dirY / dirLen, perpY = dirX / dirLen;
+    const bend = Math.sin(Math.min(ball.progress, 1) * Math.PI) * ball.curl;
+    ball.x = straightX + perpX * bend;
+    ball.y = straightY + perpY * bend;
     ball.r = 9 - 5 * bp;
 
     if (keeper.diving) {
@@ -517,9 +553,9 @@ function update(dt) {
 
 function drawGoal() {
   // net
-  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-  ctx.lineWidth = 1;
-  const cols = 12, rows = 6;
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.lineWidth = 0.6;
+  const cols = 24, rows = 12;
   for (let i = 0; i <= cols; i++) {
     const x = GOAL_CENTER_X - GOAL_HALF_WIDTH + (i / cols) * (GOAL_HALF_WIDTH * 2);
     ctx.beginPath();
@@ -551,14 +587,43 @@ function drawGoal() {
 function drawPitchLines() {
   ctx.strokeStyle = 'rgba(255,255,255,0.7)';
   ctx.lineWidth = 2;
+
+  // penalty box: wider than the goal even at the goal line, widening further toward the spot
+  const boxTopY = GOAL_BOTTOM_Y;
+  const boxTopHalfWidth = GOAL_HALF_WIDTH + 45;
+  const boxBottomY = 470;
+  const boxBottomHalfWidth = 260;
   ctx.beginPath();
-  ctx.moveTo(GOAL_CENTER_X - GOAL_HALF_WIDTH, GOAL_BOTTOM_Y);
-  ctx.lineTo(90, 470);
-  ctx.moveTo(GOAL_CENTER_X + GOAL_HALF_WIDTH, GOAL_BOTTOM_Y);
-  ctx.lineTo(550, 470);
-  ctx.moveTo(90, 470);
-  ctx.lineTo(550, 470);
+  ctx.moveTo(GOAL_CENTER_X - boxTopHalfWidth, boxTopY);
+  ctx.lineTo(GOAL_CENTER_X - boxBottomHalfWidth, boxBottomY);
+  ctx.moveTo(GOAL_CENTER_X + boxTopHalfWidth, boxTopY);
+  ctx.lineTo(GOAL_CENTER_X + boxBottomHalfWidth, boxBottomY);
+  ctx.moveTo(GOAL_CENTER_X - boxBottomHalfWidth, boxBottomY);
+  ctx.lineTo(GOAL_CENTER_X + boxBottomHalfWidth, boxBottomY);
   ctx.stroke();
+
+  // six-yard box: smaller, nested version of the same shape
+  const smallTopHalfWidth = GOAL_HALF_WIDTH + 15;
+  const smallBottomY = 260;
+  const smallBottomHalfWidth = 180;
+  ctx.beginPath();
+  ctx.moveTo(GOAL_CENTER_X - smallTopHalfWidth, boxTopY);
+  ctx.lineTo(GOAL_CENTER_X - smallBottomHalfWidth, smallBottomY);
+  ctx.moveTo(GOAL_CENTER_X + smallTopHalfWidth, boxTopY);
+  ctx.lineTo(GOAL_CENTER_X + smallBottomHalfWidth, smallBottomY);
+  ctx.moveTo(GOAL_CENTER_X - smallBottomHalfWidth, smallBottomY);
+  ctx.lineTo(GOAL_CENTER_X + smallBottomHalfWidth, smallBottomY);
+  ctx.stroke();
+
+  // penalty arc: the "D" bulging out from the box's front edge around the spot
+  const arcRadius = 58;
+  const dyToLine = boxBottomY - BALL_START.y;
+  if (arcRadius > dyToLine) {
+    const angleHalf = Math.acos(dyToLine / arcRadius);
+    ctx.beginPath();
+    ctx.arc(BALL_START.x, BALL_START.y, arcRadius, Math.PI / 2 - angleHalf, Math.PI / 2 + angleHalf);
+    ctx.stroke();
+  }
 
   ctx.beginPath();
   ctx.arc(BALL_START.x, BALL_START.y, 3, 0, Math.PI * 2);
@@ -570,6 +635,7 @@ function drawStickFigure(x, y, opts) {
   const o = opts || {};
   ctx.save();
   ctx.translate(x, y);
+  if (o.scale) ctx.scale(o.scale, o.scale);
   ctx.strokeStyle = o.limbColor || '#2b3a55';
   ctx.lineWidth = 3;
   ctx.lineCap = 'round';
@@ -649,6 +715,7 @@ function drawKeeper() {
     limbColor: '#7a5c00',
     armsWide: keeper.diving,
     legsApart: keeper.diving,
+    scale: 1.7,
   });
   ctx.restore();
 }
@@ -700,7 +767,7 @@ function drawAimFeedback() {
   const previewX = GOAL_CENTER_X + horiz * GOAL_HALF_WIDTH * 1.15;
   const previewY = GOAL_BOTTOM_Y - Math.min(power, 1) * (GOAL_BOTTOM_Y - GOAL_TOP_Y);
 
-  const overpowered = power > 1.05 || Math.abs(previewX - GOAL_CENTER_X) > GOAL_HALF_WIDTH + 4;
+  const overpowered = power > MISS_HIGH_POWER || Math.abs(previewX - GOAL_CENTER_X) > GOAL_HALF_WIDTH + 4;
   ctx.fillStyle = overpowered ? 'rgba(255,90,90,0.85)' : (power > 0.75 ? 'rgba(255,215,110,0.85)' : 'rgba(140,255,150,0.85)');
   ctx.beginPath();
   ctx.arc(clamp(previewX, 10, W - 10), clamp(previewY, 10, H - 10), 6, 0, Math.PI * 2);

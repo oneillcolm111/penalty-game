@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Penalty Shootout</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    width: 100%;
+    overflow-x: hidden;
+  }
+  body {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: #0b2d1e;
+    font-family: 'Trebuchet MS', Arial, sans-serif;
+    color: #eaf6ff;
+    user-select: none;
+    padding: 0 10px;
+  }
+  h1 { margin: 14px 0 4px; letter-spacing: 1px; font-size: clamp(20px, 6vw, 28px); }
+  #hud {
+    display: flex;
+    gap: 22px;
+    font-size: 17px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  #hud span { font-weight: bold; color: #ffd76e; }
+  #attemptsRow {
+    font-size: 22px;
+    margin-bottom: 8px;
+    letter-spacing: 4px;
+  }
+  canvas {
+    background: linear-gradient(to bottom, #8fd7ff 0%, #8fd7ff 11%, #cfd6da 11%, #cfd6da 15%, #2f9e44 15%, #1c6b2e 100%);
+    border: 4px solid #123b1f;
+    border-radius: 8px;
+    cursor: pointer;
+    display: block;
+    width: 100%;
+    max-width: 640px;
+    height: auto;
+    aspect-ratio: 4 / 3;
+    touch-action: none;
+  }
+  #msg {
+    margin-top: 10px;
+    height: 26px;
+    font-size: 18px;
+    font-weight: bold;
+    color: #9fffb0;
+  }
+  #instructions {
+    margin-top: 4px;
+    font-size: 13px;
+    color: #a9e0b6;
+    text-align: center;
+    max-width: 640px;
+  }
+  #overlay, #startOverlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+  }
+  #overlay.show, #startOverlay.show { display: flex; }
+  #overlay h2, #startOverlay h2 { font-size: 32px; margin-bottom: 6px; }
+  #overlay button, #startOverlay button {
+    margin-top: 16px;
+    padding: 10px 24px;
+    font-size: 16px;
+    background: #ffd76e;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: bold;
+  }
+  #overlay button:hover, #startOverlay button:hover { background: #ffe396; }
+  #overlay .secondary, #startOverlay .secondary {
+    background: transparent;
+    color: #cfe8ff;
+    text-decoration: underline;
+    font-weight: normal;
+    font-size: 14px;
+    padding: 4px;
+  }
+  #overlay .secondary:hover, #startOverlay .secondary:hover { background: transparent; color: #ffffff; }
+  #nameInput {
+    margin-top: 14px;
+    padding: 8px 12px;
+    font-size: 16px;
+    border-radius: 6px;
+    border: none;
+    width: 220px;
+    text-align: center;
+  }
+  #diffRow {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .diffBtn {
+    padding: 8px 16px;
+    font-size: 14px;
+    border-radius: 6px;
+    border: 2px solid #2b3a55;
+    background: #1a3348;
+    color: #eaf6ff;
+    cursor: pointer;
+  }
+  .diffBtn.selected {
+    background: #ffd76e;
+    color: #1a1a1a;
+    border-color: #ffd76e;
+  }
+</style>
+</head>
+<body>
+  <h1>⚽ Penalty Shootout</h1>
+  <div id="hud">
+    <div>Goals: <span id="score">0</span></div>
+    <div>Kick: <span id="kickNum">1</span>/5</div>
+    <div>Best: <span id="best">0</span>/5</div>
+  </div>
+  <div id="attemptsRow">⚪⚪⚪⚪⚪</div>
+  <canvas id="game" width="640" height="480"></canvas>
+  <div id="msg"></div>
+  <div id="instructions">Swipe/drag from the ball toward the goal to shoot — drag further up for more power, left/right to aim. Too much power sails over the bar; too wide misses the post. Best of 5 kicks!</div>
+
+  <div id="startOverlay" class="show">
+    <h2>⚽ Penalty Shootout</h2>
+    <div>Who's shooting?</div>
+    <input id="nameInput" type="text" placeholder="Your name" maxlength="16">
+    <div id="diffRow">
+      <button class="diffBtn" data-diff="Easy">Easy</button>
+      <button class="diffBtn selected" data-diff="Normal">Normal</button>
+      <button class="diffBtn" data-diff="Hard">Hard</button>
+    </div>
+    <button id="startBtn">Start Shootout</button>
+  </div>
+
+  <div id="overlay">
+    <h2 id="overlayTitle">Shootout Over!</h2>
+    <div id="overlayScore" style="font-size:20px;"></div>
+    <button id="restartBtn">Play Again</button>
+    <button id="switchPlayerBtn" class="secondary">Switch player / difficulty</button>
+  </div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+const scoreEl = document.getElementById('score');
+const kickNumEl = document.getElementById('kickNum');
+const bestEl = document.getElementById('best');
+const attemptsRowEl = document.getElementById('attemptsRow');
+const msgEl = document.getElementById('msg');
+const overlay = document.getElementById('overlay');
+const overlayTitle = document.getElementById('overlayTitle');
+const overlayScore = document.getElementById('overlayScore');
+const restartBtn = document.getElementById('restartBtn');
+const switchPlayerBtn = document.getElementById('switchPlayerBtn');
+const startOverlay = document.getElementById('startOverlay');
+const nameInput = document.getElementById('nameInput');
+const startBtn = document.getElementById('startBtn');
+const diffBtns = document.querySelectorAll('.diffBtn');
+
+const DIFFICULTIES = {
+  Easy:   { keeperReach: 55, keeperSkill: 0.30, diveDurationMs: 500 },
+  Normal: { keeperReach: 72, keeperSkill: 0.55, diveDurationMs: 430 },
+  Hard:   { keeperReach: 88, keeperSkill: 0.80, diveDurationMs: 360 },
+};
+let currentDifficultyKey = 'Normal';
+let currentDifficulty = DIFFICULTIES.Normal;
+
+function bestScoresMap() {
+  try { return JSON.parse(localStorage.getItem('penaltyBestByName') || '{}'); }
+  catch (e) { return {}; }
+}
+function getBestForName(name) { return bestScoresMap()[name] || 0; }
+function setBestForName(name, value) {
+  const map = bestScoresMap();
+  map[name] = value;
+  localStorage.setItem('penaltyBestByName', JSON.stringify(map));
+}
+
+let playerName = localStorage.getItem('penaltyLastName') || '';
+nameInput.value = playerName;
+let best = 0;
+
+diffBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    diffBtns.forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    currentDifficultyKey = btn.dataset.diff;
+  });
+});
+
+startBtn.addEventListener('click', () => {
+  ensureAudio();
+  playWhistle();
+  playerName = (nameInput.value || '').trim() || 'Striker';
+  localStorage.setItem('penaltyLastName', playerName);
+  currentDifficulty = DIFFICULTIES[currentDifficultyKey];
+  best = getBestForName(playerName);
+  bestEl.textContent = best;
+  startOverlay.classList.remove('show');
+  resetGame();
+});
+
+switchPlayerBtn.addEventListener('click', () => {
+  running = false;
+  overlay.classList.remove('show');
+  startOverlay.classList.add('show');
+});
+
+// --- goal geometry ---
+const GOAL_CENTER_X = 320;
+const GOAL_HALF_WIDTH = 140;
+const GOAL_TOP_Y = 70;
+const GOAL_BOTTOM_Y = 170;
+const BALL_START = { x: 320, y: 430 };
+const KICKER_POS = { x: 320, y: 460 };
+
+const MAX_DRAG_X = 140;
+const MAX_DRAG_Y = 220;
+const MIN_DRAG = 18;
+
+let running = false;
+let attempts = []; // 'goal' | 'save' | 'wide' | 'high'
+let attemptIndex = 0;
+let score = 0;
+
+let phase = 'aiming'; // aiming | flying | result
+let resultTimer = 0;
+const RESULT_PAUSE_MS = 1300;
+
+let ball = { x: BALL_START.x, y: BALL_START.y, r: 9, startX: 0, startY: 0, targetX: 0, targetY: 0, progress: 0, duration: 480 };
+let keeper = { x: GOAL_CENTER_X, startX: GOAL_CENTER_X, targetX: GOAL_CENTER_X, diving: false, progress: 0, duration: 430 };
+let pendingOutcome = null;
+
+let kickerState = 'idle'; // idle | celebrate | sad
+let kickerTimer = 0;
+const KICKER_ANIM_MS = 1100;
+
+let drag = { active: false, startX: 0, startY: 0, curX: 0, curY: 0 };
+
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    audioCtx = new AC();
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+function playTone(freq, dur, type, delay, gainVal) {
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime + (delay || 0);
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type || 'sine';
+  osc.frequency.setValueAtTime(freq, t0);
+  gain.gain.setValueAtTime(gainVal || 0.15, t0);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start(t0);
+  osc.stop(t0 + dur + 0.02);
+}
+function playKick() {
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(180, t0);
+  osc.frequency.exponentialRampToValueAtTime(60, t0 + 0.12);
+  gain.gain.setValueAtTime(0.2, t0);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.14);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start(t0);
+  osc.stop(t0 + 0.16);
+}
+function playWhistle() {
+  playTone(1800, 0.35, 'sine', 0, 0.08);
+}
+function playGoalCheer() {
+  playTone(523.25, 0.12, 'triangle', 0);
+  playTone(659.25, 0.12, 'triangle', 0.1);
+  playTone(783.99, 0.12, 'triangle', 0.2);
+  playTone(1046.5, 0.2, 'triangle', 0.3);
+}
+function playMissGroan() {
+  playTone(300, 0.3, 'sawtooth', 0, 0.1);
+  playTone(220, 0.4, 'sawtooth', 0.2, 0.1);
+}
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function easeOutQuad(t) { return 1 - (1 - t) * (1 - t); }
+
+function updateAttemptsRow() {
+  const icons = attempts.map(a => a === 'goal' ? '⚽' : '❌');
+  while (icons.length < 5) icons.push('⚪');
+  attemptsRowEl.textContent = icons.join('');
+}
+
+function showMessage(text, ms) {
+  msgEl.textContent = text;
+  msgTimer = ms || 1200;
+}
+let msgTimer = 0;
+
+function resetAttempt() {
+  ball.x = BALL_START.x;
+  ball.y = BALL_START.y;
+  ball.r = 9;
+  keeper.x = GOAL_CENTER_X;
+  keeper.diving = false;
+  drag.active = false;
+  phase = 'aiming';
+}
+
+function resetGame() {
+  attempts = [];
+  attemptIndex = 0;
+  score = 0;
+  kickerState = 'idle';
+  kickerTimer = 0;
+  scoreEl.textContent = score;
+  kickNumEl.textContent = 1;
+  updateAttemptsRow();
+  msgEl.textContent = '';
+  overlay.classList.remove('show');
+  resetAttempt();
+  running = true;
+  lastTs = null;
+  requestAnimationFrame(loop);
+}
+
+function getCanvasPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+}
+
+function takeShot(dx, dy) {
+  ensureAudio();
+  playKick();
+
+  const upness = Math.max(0, -dy);
+  const power = upness / MAX_DRAG_Y; // 0..~1.3+
+  const horiz = clamp(dx / MAX_DRAG_X, -1.3, 1.3);
+
+  const rawTargetX = GOAL_CENTER_X + horiz * GOAL_HALF_WIDTH * 1.15;
+  const rawTargetY = GOAL_BOTTOM_Y - Math.min(power, 1) * (GOAL_BOTTOM_Y - GOAL_TOP_Y);
+
+  const missHigh = power > 1.05;
+  const missWide = Math.abs(rawTargetX - GOAL_CENTER_X) > GOAL_HALF_WIDTH + 4;
+
+  ball.startX = ball.x;
+  ball.startY = ball.y;
+  ball.targetX = clamp(rawTargetX, GOAL_CENTER_X - GOAL_HALF_WIDTH - 50, GOAL_CENTER_X + GOAL_HALF_WIDTH + 50);
+  ball.targetY = missHigh ? (GOAL_TOP_Y - 34) : rawTargetY;
+  ball.progress = 0;
+  ball.duration = 480;
+
+  const skillRoll = Math.random() < currentDifficulty.keeperSkill;
+  let diveTargetX;
+  if (skillRoll) {
+    diveTargetX = clamp(rawTargetX + (Math.random() * 30 - 15), GOAL_CENTER_X - GOAL_HALF_WIDTH, GOAL_CENTER_X + GOAL_HALF_WIDTH);
+  } else {
+    diveTargetX = GOAL_CENTER_X + (Math.random() * 2 - 1) * GOAL_HALF_WIDTH;
+  }
+  keeper.startX = keeper.x;
+  keeper.targetX = diveTargetX;
+  keeper.diving = true;
+  keeper.progress = 0;
+  keeper.duration = currentDifficulty.diveDurationMs;
+
+  let outcome;
+  if (missHigh) {
+    outcome = 'high';
+  } else if (missWide) {
+    outcome = 'wide';
+  } else {
+    const topCornerBonus = rawTargetY < (GOAL_TOP_Y + (GOAL_BOTTOM_Y - GOAL_TOP_Y) * 0.35) ? 0.6 : 1.0;
+    const effectiveReach = currentDifficulty.keeperReach * topCornerBonus;
+    const dist = Math.abs(rawTargetX - diveTargetX);
+    outcome = dist <= effectiveReach ? 'save' : 'goal';
+  }
+
+  pendingOutcome = outcome;
+  phase = 'flying';
+}
+
+function resolveShot(outcome) {
+  attempts.push(outcome === 'goal' ? 'goal' : 'miss');
+  if (outcome === 'goal') {
+    score++;
+    kickerState = 'celebrate';
+    playGoalCheer();
+    showMessage('GOAL!', RESULT_PAUSE_MS);
+  } else if (outcome === 'save') {
+    kickerState = 'sad';
+    playMissGroan();
+    showMessage('SAVED!', RESULT_PAUSE_MS);
+  } else if (outcome === 'wide') {
+    kickerState = 'sad';
+    playMissGroan();
+    showMessage('WIDE!', RESULT_PAUSE_MS);
+  } else {
+    kickerState = 'sad';
+    playMissGroan();
+    showMessage('OVER THE BAR!', RESULT_PAUSE_MS);
+  }
+  scoreEl.textContent = score;
+  updateAttemptsRow();
+  kickerTimer = KICKER_ANIM_MS;
+  attemptIndex++;
+  phase = 'result';
+  resultTimer = RESULT_PAUSE_MS;
+}
+
+function endShootout() {
+  running = false;
+  if (score > best) {
+    best = score;
+    setBestForName(playerName, best);
+  }
+  bestEl.textContent = best;
+  overlayTitle.textContent = 'Shootout Over!';
+  overlayScore.textContent = `${playerName}, you scored ${score} out of 5! Best: ${best}/5`;
+  overlay.classList.add('show');
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  if (!running || phase !== 'aiming') return;
+  e.preventDefault();
+  const pos = getCanvasPos(e);
+  drag.active = true;
+  drag.startX = pos.x;
+  drag.startY = pos.y;
+  drag.curX = pos.x;
+  drag.curY = pos.y;
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!drag.active) return;
+  e.preventDefault();
+  const pos = getCanvasPos(e);
+  drag.curX = pos.x;
+  drag.curY = pos.y;
+});
+canvas.addEventListener('pointerup', (e) => {
+  if (!drag.active) return;
+  drag.active = false;
+  const dx = drag.curX - drag.startX;
+  const dy = drag.curY - drag.startY;
+  if (Math.hypot(dx, dy) < MIN_DRAG) return;
+  takeShot(dx, dy);
+});
+canvas.addEventListener('pointercancel', () => { drag.active = false; });
+
+restartBtn.addEventListener('click', resetGame);
+
+function update(dt) {
+  if (phase === 'flying') {
+    ball.progress = Math.min(1, ball.progress + dt / ball.duration);
+    if (keeper.diving) keeper.progress = Math.min(1, keeper.progress + dt / keeper.duration);
+
+    const bp = easeOutQuad(ball.progress);
+    ball.x = ball.startX + (ball.targetX - ball.startX) * bp;
+    ball.y = ball.startY + (ball.targetY - ball.startY) * bp;
+    ball.r = 9 - 5 * bp;
+
+    if (keeper.diving) {
+      const kp = easeOutQuad(keeper.progress);
+      keeper.x = keeper.startX + (keeper.targetX - keeper.startX) * kp;
+    }
+
+    if (ball.progress >= 1) {
+      resolveShot(pendingOutcome);
+    }
+  } else if (phase === 'result') {
+    resultTimer -= dt;
+    if (resultTimer <= 0) {
+      if (attemptIndex >= 5) {
+        endShootout();
+      } else {
+        kickNumEl.textContent = attemptIndex + 1;
+        resetAttempt();
+      }
+    }
+  }
+
+  if (msgTimer > 0) {
+    msgTimer -= dt;
+    if (msgTimer <= 0) msgEl.textContent = '';
+  }
+  if (kickerTimer > 0) {
+    kickerTimer -= dt;
+    if (kickerTimer <= 0) { kickerTimer = 0; kickerState = 'idle'; }
+  }
+}
+
+function drawGoal() {
+  // net
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 1;
+  const cols = 12, rows = 6;
+  for (let i = 0; i <= cols; i++) {
+    const x = GOAL_CENTER_X - GOAL_HALF_WIDTH + (i / cols) * (GOAL_HALF_WIDTH * 2);
+    ctx.beginPath();
+    ctx.moveTo(x, GOAL_TOP_Y);
+    ctx.lineTo(x, GOAL_BOTTOM_Y);
+    ctx.stroke();
+  }
+  for (let j = 0; j <= rows; j++) {
+    const y = GOAL_TOP_Y + (j / rows) * (GOAL_BOTTOM_Y - GOAL_TOP_Y);
+    ctx.beginPath();
+    ctx.moveTo(GOAL_CENTER_X - GOAL_HALF_WIDTH, y);
+    ctx.lineTo(GOAL_CENTER_X + GOAL_HALF_WIDTH, y);
+    ctx.stroke();
+  }
+
+  // posts + crossbar
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.moveTo(GOAL_CENTER_X - GOAL_HALF_WIDTH, GOAL_TOP_Y);
+  ctx.lineTo(GOAL_CENTER_X + GOAL_HALF_WIDTH, GOAL_TOP_Y);
+  ctx.moveTo(GOAL_CENTER_X - GOAL_HALF_WIDTH, GOAL_TOP_Y);
+  ctx.lineTo(GOAL_CENTER_X - GOAL_HALF_WIDTH, GOAL_BOTTOM_Y);
+  ctx.moveTo(GOAL_CENTER_X + GOAL_HALF_WIDTH, GOAL_TOP_Y);
+  ctx.lineTo(GOAL_CENTER_X + GOAL_HALF_WIDTH, GOAL_BOTTOM_Y);
+  ctx.stroke();
+}
+
+function drawPitchLines() {
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(GOAL_CENTER_X - GOAL_HALF_WIDTH, GOAL_BOTTOM_Y);
+  ctx.lineTo(90, 470);
+  ctx.moveTo(GOAL_CENTER_X + GOAL_HALF_WIDTH, GOAL_BOTTOM_Y);
+  ctx.lineTo(550, 470);
+  ctx.moveTo(90, 470);
+  ctx.lineTo(550, 470);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(BALL_START.x, BALL_START.y, 3, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.fill();
+}
+
+function drawStickFigure(x, y, opts) {
+  const o = opts || {};
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.strokeStyle = o.limbColor || '#2b3a55';
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+
+  // legs
+  ctx.beginPath();
+  if (o.legsApart) {
+    ctx.moveTo(-3, 0); ctx.lineTo(-10, -10);
+    ctx.moveTo(3, 0); ctx.lineTo(10, -10);
+  } else {
+    ctx.moveTo(-3, 0); ctx.lineTo(-4, -14);
+    ctx.moveTo(3, 0); ctx.lineTo(4, -14);
+  }
+  ctx.stroke();
+
+  // torso
+  ctx.fillStyle = o.shirtColor || '#d24b4b';
+  ctx.fillRect(-6, -30, 12, 16);
+
+  // arms
+  ctx.strokeStyle = o.shirtColor || '#d24b4b';
+  ctx.beginPath();
+  if (o.armsUp) {
+    ctx.moveTo(4, -26); ctx.lineTo(14, -42);
+    ctx.moveTo(-4, -26); ctx.lineTo(-14, -42);
+  } else if (o.armsWide) {
+    ctx.moveTo(4, -26); ctx.lineTo(20, -24);
+    ctx.moveTo(-4, -26); ctx.lineTo(-20, -24);
+  } else if (o.armsDown) {
+    ctx.moveTo(4, -26); ctx.lineTo(9, -10);
+    ctx.moveTo(-4, -26); ctx.lineTo(-9, -10);
+  } else {
+    ctx.moveTo(4, -26); ctx.lineTo(9, -16);
+    ctx.moveTo(-4, -26); ctx.lineTo(-9, -16);
+  }
+  ctx.stroke();
+
+  // head
+  ctx.fillStyle = '#f2c49b';
+  ctx.beginPath();
+  ctx.arc(0, -36, 6, 0, Math.PI * 2);
+  ctx.fill();
+
+  // face
+  ctx.strokeStyle = '#3a2a1a';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  if (o.face === 'sad') {
+    ctx.arc(0, -30, 2.5, Math.PI, Math.PI * 2);
+  } else if (o.face === 'happy') {
+    ctx.arc(0, -32, 3, 0.15 * Math.PI, 0.85 * Math.PI);
+  } else {
+    ctx.arc(0, -32, 2, 0.2 * Math.PI, 0.8 * Math.PI);
+  }
+  ctx.stroke();
+
+  if (o.face === 'sad') {
+    ctx.fillStyle = '#6fc8ff';
+    ctx.beginPath();
+    ctx.arc(-3, -28, 1.5, 0, Math.PI * 2);
+    ctx.arc(3, -28, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function drawKeeper() {
+  const diveT = keeper.diving ? easeOutQuad(keeper.progress) : 0;
+  const dir = keeper.targetX >= keeper.startX ? 1 : -1;
+  const lean = diveT * dir * 0.5; // radians of lean into the dive
+  ctx.save();
+  ctx.translate(keeper.x, GOAL_TOP_Y + 68);
+  ctx.rotate(lean * 0.6);
+  drawStickFigure(0, 0, {
+    shirtColor: '#ffd76e',
+    limbColor: '#7a5c00',
+    armsWide: keeper.diving,
+    legsApart: keeper.diving,
+  });
+  ctx.restore();
+}
+
+function drawKicker() {
+  drawStickFigure(KICKER_POS.x, KICKER_POS.y, {
+    shirtColor: '#3f7fd6',
+    armsUp: kickerState === 'celebrate',
+    armsDown: kickerState === 'sad',
+    face: kickerState === 'celebrate' ? 'happy' : (kickerState === 'sad' ? 'sad' : 'neutral'),
+  });
+}
+
+function drawBall() {
+  ctx.save();
+  ctx.fillStyle = '#f5f5f0';
+  ctx.strokeStyle = '#2b2b2b';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, Math.max(2, ball.r), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#2b2b2b';
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, Math.max(1, ball.r * 0.3), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawAimFeedback() {
+  if (phase !== 'aiming' || !drag.active) return;
+  const dx = drag.curX - drag.startX;
+  const dy = drag.curY - drag.startY;
+  if (Math.hypot(dx, dy) < MIN_DRAG) return;
+
+  ctx.save();
+  ctx.setLineDash([6, 5]);
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(drag.startX, drag.startY);
+  ctx.lineTo(drag.curX, drag.curY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  const upness = Math.max(0, -dy);
+  const power = upness / MAX_DRAG_Y;
+  const horiz = clamp(dx / MAX_DRAG_X, -1.3, 1.3);
+  const previewX = GOAL_CENTER_X + horiz * GOAL_HALF_WIDTH * 1.15;
+  const previewY = GOAL_BOTTOM_Y - Math.min(power, 1) * (GOAL_BOTTOM_Y - GOAL_TOP_Y);
+
+  const overpowered = power > 1.05 || Math.abs(previewX - GOAL_CENTER_X) > GOAL_HALF_WIDTH + 4;
+  ctx.fillStyle = overpowered ? 'rgba(255,90,90,0.85)' : (power > 0.75 ? 'rgba(255,215,110,0.85)' : 'rgba(140,255,150,0.85)');
+  ctx.beginPath();
+  ctx.arc(clamp(previewX, 10, W - 10), clamp(previewY, 10, H - 10), 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  drawGoal();
+  drawPitchLines();
+  drawKeeper();
+  drawKicker();
+  drawBall();
+  drawAimFeedback();
+}
+
+let lastTs = null;
+function loop(ts) {
+  if (!running) return;
+  if (lastTs === null) lastTs = ts;
+  const dt = ts - lastTs;
+  lastTs = ts;
+
+  update(dt);
+  draw();
+
+  requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
